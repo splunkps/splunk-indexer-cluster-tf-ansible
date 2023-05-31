@@ -1,0 +1,79 @@
+Intall ansible and terraform
+
+clone the repository
+
+create a user in aws and assign AdministratorAccess policy to newly created user. create a security credentials for the user and use them
+in terraform.tfvars
+
+update terraform.tfvars
+
+main.tf:
+  Terraform will create 1 manager node, 3 indexers and 1 search head with default main.tf
+  
+  to increase the indexers and search heads you can change the indexer_count and searchhead_count variable in main.tf
+  
+  terraform uses ami-0713848d3031ddec5 which is pre installed with Splunk Enterprise 9.0.4.1. The ami is from marketplace.
+  if you are first time using market place ami then you need to agree to Terms & Conditions. 
+  
+  default instance type is t2.micro which is eligible with free tier license if you have it. 
+  subnet id specified. change subnet id based on your subnet ids available. 
+  key name change based on the key you have generated. this is required to take ssh access of ec2 intance after the ec2 instances are spun up. 
+  50GB is assigned to root volume 
+  hostname will be setup after the ec2 instance is spun up. this is useful to identify host from which logs are coming in when you make search
+  in search head cluster. 
+  
+  two keys are created in tags : 
+    Name of the instance 
+    Role of the instance - its useful to group hosts with similar roles and run commands in cluster setup using ansible
+  
+  security groups:
+    new security group will be created allowing:
+      inbound rules:
+        22/TCP from any source
+        8000/TCP from any source
+        allow all ports from the security group
+      outbound rules:
+        443/TCP to destination
+        allow all ports to the security group
+        
+    finally it write public ips of ec2 instances into new file "public_ips.txt"
+
+Running terraform:
+  terraform init
+  terraform plan
+  terraform apply
+  
+Destroy terraform:
+  #The below command will remove the infrastructure created when you ran terraform apply command. 
+  terraform destroy
+
+Ansible script to setup the cluster:
+
+configure aws credentials in home directory:
+  cat ~/.aws/credentials 
+  [default]
+  aws_access_key_id = <<>> #key used in terraform.tfvars
+  aws_secret_access_key = <<>> #key used in terraform.tfvars
+
+aws_ec2.yaml:
+  plugins: it uses aws_ec2 plug in to get inventory
+  change region: region should match with the region used in above terraform. 
+  keyed_groups: based on the speficied key ec2 instances will be grouped
+  filters: to apply filters while fetching ec2 inventory
+  compose: creating local variables with ec2 variables. this is useful to reference them in ansbile playbook
+
+#To output full inventory
+ansible-inventory -i aws_ec2.yaml --list 
+
+#To output ec2-instances by groups
+ansible-inventory -i aws_ec2.yaml --graph 
+  
+single-site-indexer-cluster.yaml:
+  ansible_ssh_private_key_file: pem file path which you will use to ssh ec2 instance
+  it has 3 plays and multiple tasks in each play to build the cluster
+  it also add forward servers to cluster manager and search heads to forward their internal logs to indexers. 
+  you may change indexer cluster secret key. 
+  splunk is shipped with ami has web password. that is : SPLUNK-<<instanceid>>
+
+Run playbook:
+  ansible-playbook -i aws_ec2.yaml single-site-indexer-cluster.yaml 

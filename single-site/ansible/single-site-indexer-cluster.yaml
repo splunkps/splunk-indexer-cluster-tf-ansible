@@ -1,0 +1,99 @@
+---
+  - hosts: splunk_single_site_idxr_cluster_Manager
+    user: ec2-user
+    gather_facts: True
+    become: yes
+    become_method: sudo
+    vars:
+      ansible_ssh_private_key_file: /path/to/pem/file.pem
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    tasks:
+      - name: Retrieve master IP & instance ID
+        set_fact:
+          master: "{{ hostvars[inventory_hostname]['ansible_private_ip'] }}"
+          master_instance_id: "{{ hostvars[inventory_hostname]['instance_id'] }}"
+
+      - name: setting up cluster manager
+        shell: "sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode manager -replication_factor 2 -search_factor 2 -secret mysecret1234 -auth admin:SPLUNK-{{ master_instance_id }} -cluster_label single_site ;"
+
+      - name: Add forward servers to cluster master
+        blockinfile:
+          dest: /opt/splunk/etc/system/local/outputs.conf 
+          block: |
+            [tcpout]
+            defaultGroup = indexers
+
+            [tcpout:indexers]
+            server = {{ groups['splunk_single_site_idxr_cluster_Indexer']|map('extract', hostvars, 'ansible_private_ip')|join(':9997,') }}:9997
+          create: yes
+        notify: Restart Splunkd
+
+    handlers:
+    - name: Restart Splunkd
+      become: yes
+      service:
+        name: Splunkd
+        state: restarted
+        
+    - name: Pause after restarting Splunkd
+      pause:
+        minutes: 1
+
+  - hosts: splunk_single_site_idxr_cluster_Indexer
+    user: ec2-user
+    become: yes
+    become_method: sudo
+    vars:
+      ansible_ssh_private_key_file: /path/to/pem/file.pem
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    tasks:
+      - name: Retrieve instance ID
+        set_fact:
+          master: "{{ hostvars[groups['splunk_single_site_idxr_cluster_Manager'][0]]['private_ip_address'] }}"
+          indexer_instance_id: "{{ hostvars[inventory_hostname]['instance_id'] }}"
+
+      - name: Setting up indexer cluster
+        shell: "sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode peer -manager_uri https://{{ master }}:8089 -replication_port 9902 -secret mysecret1234 -auth admin:SPLUNK-{{ indexer_instance_id }}"
+        notify: Restart Splunkd
+
+    handlers:
+    - name: Restart Splunkd
+      become: yes
+      service:
+        name: Splunkd
+        state: restarted
+
+  - hosts: splunk_single_site_idxr_cluster_Searchhead
+    user: ec2-user
+    become: yes
+    become_method: sudo
+    vars:
+      ansible_ssh_private_key_file: /path/to/pem/file.pem
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    tasks:
+      - name: Retrieve instance ID
+        set_fact:
+          master: "{{ hostvars[groups['splunk_single_site_idxr_cluster_Manager'][0]]['private_ip_address'] }}"
+          sh_instance_id: "{{ hostvars[inventory_hostname]['instance_id'] }}"
+
+      - name: Search Head
+        shell: "sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode searchhead -manager_uri https://{{ master }}:8089 -secret mysecret1234 -auth admin:SPLUNK-{{ sh_instance_id }}"
+
+      - name: Add forward servers to search head
+        blockinfile:
+          dest: /opt/splunk/etc/system/local/outputs.conf 
+          block: |
+            [tcpout]
+            defaultGroup = indexers
+
+            [tcpout:indexers]
+            server = {{ groups['splunk_single_site_idxr_cluster_Indexer']|map('extract', hostvars, 'ansible_private_ip')|join(':9997,') }}:9997
+          create: yes
+        notify: Restart Splunkd
+
+    handlers:
+    - name: Restart Splunkd
+      become: yes
+      service:
+        name: Splunkd
+        state: restarted
